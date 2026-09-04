@@ -1,10 +1,21 @@
+import secrets
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.models.user import User
+from app.models.password_reset import PasswordResetToken
 from app.schemas.user import UserCreate, UserResponse
-from app.schemas.auth import LoginRequest, AuthResponse, LogoutResponse
+from app.schemas.auth import (
+    LoginRequest,
+    AuthResponse,
+    LogoutResponse,
+    PasswordResetRequest,
+    PasswordResetRequestResponse,
+    PasswordResetConfirm,
+    PasswordResetConfirmResponse,
+)
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -77,3 +88,77 @@ def logout():
     Stateless JWT architecture relies on short expiry + client clearing tokens.
     """
     return LogoutResponse(message="Successfully logged out")
+
+@router.post("/request-reset", response_model=PasswordResetRequestResponse)
+def request_password_reset(reset_in: PasswordResetRequest, db: Session = Depends(get_db)):
+    """
+    Generate a short-lived, single-use reset token for forgotten password.
+    Returns generic confirmation to prevent email enumeration.
+    """
+    email_clean = reset_in.email.lower().strip()
+    user = db.query(User).filter(User.email == email_clean).first()
+
+    reset_token = None
+    if user and user.is_active:
+        # Invalidate any previously issued unused tokens
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used == False
+        ).update({"used": True})
+
+        token_str = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+
+        token_record = PasswordResetToken(
+            user_id=user.id,
+            token=token_str,
+            expires_at=expires_at,
+            used=False
+        )
+        db.add(token_record)
+        db.commit()
+        reset_token = token_str
+
+    return PasswordResetRequestResponse(
+        message="If the email is registered, password reset instructions have been sent.",
+        reset_token=reset_token
+    )
+
+@router.post("/confirm-reset", response_model=PasswordResetConfirmResponse)
+def confirm_password_reset(confirm_in: PasswordResetConfirm, db: Session = Depends(get_db)):
+    """
+    Verify reset token, hash new password with bcrypt, update user record, and invalidate token.
+    """
+    token_record = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token == confirm_in.token.strip()
+    ).first()
+
+    if not token_record or token_record.used:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token"
+        )
+
+    if token_record.expires_at < datetime.now(timezone.utc):
+        token_record.used = True
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has expired"
+        )
+
+    user = db.query(User).filter(User.id == token_record.user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user account"
+        )
+
+    # Hash new password with bcrypt and update
+    user.hashed_password = get_password_hash(confirm_in.new_password)
+    token_record.used = True
+    db.commit()
+
+    return PasswordResetConfirmResponse(
+        message="Password has been successfully reset. You may now sign in with your new password."
+    )

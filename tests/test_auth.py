@@ -101,3 +101,58 @@ def test_logout_success():
     assert response.status_code == 200
     data = response.json()
     assert data["message"] == "Successfully logged out"
+
+def test_password_reset_flow():
+    random_email = f"reset_user_{uuid.uuid4().hex[:8]}@example.com"
+    client.post("/auth/signup", json={
+        "name": "Reset Operator",
+        "email": random_email,
+        "password": "initialpassword123"
+    })
+
+    # 1. Request reset for existing user
+    req_res = client.post("/auth/request-reset", json={"email": random_email})
+    assert req_res.status_code == 200
+    req_data = req_res.json()
+    assert "password reset instructions" in req_data["message"].lower()
+    token = req_data["reset_token"]
+    assert token is not None
+
+    # 2. Confirm reset with new password
+    new_pwd = "brandnewpassword456"
+    confirm_res = client.post("/auth/confirm-reset", json={
+        "token": token,
+        "new_password": new_pwd
+    })
+    assert confirm_res.status_code == 200
+    assert "successfully reset" in confirm_res.json()["message"].lower()
+
+    # 3. Old password should fail
+    old_login = client.post("/auth/login", json={
+        "email": random_email,
+        "password": "initialpassword123"
+    })
+    assert old_login.status_code == 401
+
+    # 4. New password should succeed
+    new_login = client.post("/auth/login", json={
+        "email": random_email,
+        "password": new_pwd
+    })
+    assert new_login.status_code == 200
+    assert "access_token" in new_login.json()
+
+    # 5. Reusing the token should fail
+    reuse_res = client.post("/auth/confirm-reset", json={
+        "token": token,
+        "new_password": "anotherpassword789"
+    })
+    assert reuse_res.status_code == 400
+
+def test_request_reset_nonexistent_user():
+    response = client.post("/auth/request-reset", json={"email": "nobody_exists@example.com"})
+    assert response.status_code == 200
+    data = response.json()
+    # Generic message returned, no token
+    assert "password reset instructions" in data["message"].lower()
+    assert data["reset_token"] is None
