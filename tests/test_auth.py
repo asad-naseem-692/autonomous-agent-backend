@@ -95,3 +95,9 @@ def test_get_me_authenticated():
 def test_get_me_unauthorized():
     response = client.get("/auth/me")
     assert response.status_code == 401
+
+def test_logout_success():
+    response = client.post("/auth/logout")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["message"] == "Successfully logged out"

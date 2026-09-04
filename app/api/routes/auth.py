@@ -4,7 +4,7 @@ from app.core.database import get_db
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse
-from app.schemas.auth import LoginRequest, AuthResponse
+from app.schemas.auth import LoginRequest, AuthResponse, LogoutResponse
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -69,3 +69,11 @@ def login(login_in: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+@router.post("/logout", response_model=LogoutResponse)
+def logout():
+    """
+    Sign out endpoint confirming session termination.
+    Stateless JWT architecture relies on short expiry + client clearing tokens.
+    """
+    return LogoutResponse(message="Successfully logged out")
