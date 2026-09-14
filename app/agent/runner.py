@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import uuid
@@ -6,6 +7,7 @@ from typing import List, Tuple, Dict, Any, Optional
 
 from openai import AsyncOpenAI
 from agents import Agent, OpenAIChatCompletionsModel, Runner
+from agents.exceptions import ModelBehaviorError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -77,7 +79,36 @@ async def run_agent_turn(
         full_prompt = user_prompt
 
     logger.info("Starting agent turn for conversation %s", conversation_id)
-    result = await Runner.run(agent, full_prompt)
+
+    # Retry up to 3 times: Gemini occasionally returns an empty turn
+    # (no text, no tool calls) which the SDK raises as ModelBehaviorError.
+    MAX_RETRIES = 3
+    last_exc: Exception | None = None
+    result = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            result = await Runner.run(agent, full_prompt)
+            break  # success
+        except ModelBehaviorError as exc:
+            last_exc = exc
+            logger.warning(
+                "ModelBehaviorError on attempt %d/%d for conv %s: %s",
+                attempt, MAX_RETRIES, conversation_id, exc,
+            )
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(2 ** attempt)  # 2s, 4s back-off
+        except Exception as exc:
+            logger.error(
+                "Unexpected error on attempt %d/%d for conv %s: %s",
+                attempt, MAX_RETRIES, conversation_id, exc, exc_info=True,
+            )
+            raise
+
+    if result is None:
+        raise RuntimeError(
+            f"Agent failed after {MAX_RETRIES} retries: {last_exc}"
+        )
+
     final_output = result.final_output or "Action completed."
 
     # Extract tool calls and outputs from runner items

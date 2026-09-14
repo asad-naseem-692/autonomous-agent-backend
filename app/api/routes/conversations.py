@@ -70,12 +70,20 @@ async def create_conversation_and_send_message(
     db.refresh(user_msg)
 
     # 3. Run agent reasoning loop
-    final_output, tool_logs = await run_agent_turn(
-        conversation_id=conversation.id,
-        user_prompt=payload.message,
-        history_messages=[],
-        db=db,
-    )
+    try:
+        final_output, tool_logs = await run_agent_turn(
+            conversation_id=conversation.id,
+            user_prompt=payload.message,
+            history_messages=[],
+            db=db,
+        )
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).error("Agent turn failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Agent error: {exc}",
+        )
 
     # 4. Save agent response message
     agent_msg = Message(
@@ -168,12 +176,20 @@ async def send_message_in_conversation(
     db.refresh(user_msg)
 
     # 3. Run agent reasoning loop with prior context
-    final_output, tool_logs = await run_agent_turn(
-        conversation_id=conversation.id,
-        user_prompt=payload.message,
-        history_messages=prior_messages,
-        db=db,
-    )
+    try:
+        final_output, tool_logs = await run_agent_turn(
+            conversation_id=conversation.id,
+            user_prompt=payload.message,
+            history_messages=prior_messages,
+            db=db,
+        )
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).error("Agent turn failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Agent error: {exc}",
+        )
 
     # 4. Save assistant response
     agent_msg = Message(
