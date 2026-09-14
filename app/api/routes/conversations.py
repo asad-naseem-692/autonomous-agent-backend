@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
+from openai import RateLimitError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
@@ -76,6 +77,13 @@ async def create_conversation_and_send_message(
             user_prompt=payload.message,
             history_messages=[],
             db=db,
+        )
+    except RateLimitError as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("Gemini rate limit: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="AI quota exhausted — please try again later.",
         )
     except Exception as exc:
         import logging as _log
@@ -182,6 +190,13 @@ async def send_message_in_conversation(
             user_prompt=payload.message,
             history_messages=prior_messages,
             db=db,
+        )
+    except RateLimitError as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("Gemini rate limit: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="AI quota exhausted — please try again later.",
         )
     except Exception as exc:
         import logging as _log

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Tuple, Dict, Any, Optional
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
 from agents import Agent, OpenAIChatCompletionsModel, Runner
 from agents.exceptions import ModelBehaviorError
 from sqlalchemy.orm import Session
@@ -97,6 +97,9 @@ async def run_agent_turn(
             )
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(2 ** attempt)  # 2s, 4s back-off
+        except RateLimitError:
+            # Quota exhausted — no point retrying, propagate immediately
+            raise
         except Exception as exc:
             logger.error(
                 "Unexpected error on attempt %d/%d for conv %s: %s",
