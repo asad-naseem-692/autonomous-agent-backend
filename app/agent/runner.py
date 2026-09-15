@@ -11,9 +11,10 @@ from agents.exceptions import ModelBehaviorError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.context import current_conversation_id_var
 from app.models.execution_log import ExecutionLog
 from app.models.message import Message
-from app.tools import READ_TOOLS
+from app.tools import ALL_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +26,24 @@ gemini_client = AsyncOpenAI(
 
 SYSTEM_INSTRUCTIONS = """You are the Autonomous Business Operations Agent.
 Your responsibility is to assist operations staff and administrators in managing business data.
-You have access to read tools to find customers, look up order details, inspect customer order history, and calculate account balances and dues:
+You have access to read tools to inspect system data:
 1. `find_customer`: Look up a customer by name or email.
 2. `get_order`: Fetch full details of an individual order by its order ID.
 3. `get_order_history`: Fetch all orders belonging to a customer.
 4. `calculate_balance`: Retrieve a customer's balance, unpaid orders, and net standing.
 
-Always call the relevant tool(s) to fetch actual system data before answering. Do NOT make up IDs, statuses, or amounts.
-After receiving tool results, provide a clear, professional, concise summary answering the user's request. Include key details (IDs, amounts, statuses, and dates where relevant).
+You also have access to sensitive write tools to manage customer accounts and orders:
+5. `apply_credit`: Propose adding a credit amount to a customer's account. Requires customer_id, amount, and reason.
+6. `process_refund`: Propose refunding an amount for an order. Requires order_id, amount, and reason.
+7. `cancel_order`: Propose cancelling an order. Requires order_id and reason.
+8. `update_order_status`: Propose changing an order's status (e.g. 'shipped', 'delivered', 'processing'). Requires order_id and new_status.
+
+CRITICAL SAFETY RULES:
+- Always call the relevant tool(s) to fetch or propose actual system data before answering. Do NOT make up IDs, statuses, or amounts.
+- When the user asks to modify data (apply credit, refund, cancel order, update order status), ALWAYS call the appropriate write tool.
+- Sensitive write actions DO NOT execute immediately; they automatically create a pending approval request that requires human confirmation.
+- After calling a write tool, clearly state in your summary what action was proposed with its parameters (ID, amount, reason), and explain that the user can approve or reject it via the action card.
+- Provide clear, professional, concise summaries.
 """
 
 def create_agent() -> Agent:
@@ -43,7 +54,7 @@ def create_agent() -> Agent:
             model=settings.GEMINI_CHAT_MODEL,
             openai_client=gemini_client,
         ),
-        tools=READ_TOOLS,
+        tools=ALL_TOOLS,
     )
 
 def _parse_json_safe(val: Any) -> Any:
@@ -77,6 +88,9 @@ async def run_agent_turn(
         full_prompt = f"Previous conversation context:\n{context_block}\n\nCurrent User Request: {user_prompt}"
     else:
         full_prompt = user_prompt
+
+    # Set conversation id in context for tool approval creation
+    current_conversation_id_var.set(conversation_id)
 
     logger.info("Starting agent turn for conversation %s", conversation_id)
 
@@ -155,13 +169,19 @@ async def run_agent_turn(
     created_logs: List[ExecutionLog] = []
     if db is not None:
         for call in ordered_calls:
+            is_pending = False
+            if isinstance(call["tool_output"], dict) and call["tool_output"].get("status") == "pending_approval":
+                is_pending = True
+            elif call["tool_name"] in ["apply_credit", "process_refund", "cancel_order", "update_order_status"]:
+                is_pending = True
+
             log_entry = ExecutionLog(
                 id=str(uuid.uuid4()),
                 conversation_id=conversation_id,
                 tool_name=call["tool_name"],
                 tool_input=call["tool_input"],
                 tool_output=call["tool_output"],
-                status="executed",
+                status="pending_approval" if is_pending else "executed",
                 created_at=datetime.now(timezone.utc),
             )
             db.add(log_entry)

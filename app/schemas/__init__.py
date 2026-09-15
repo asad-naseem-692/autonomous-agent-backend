@@ -16,6 +16,7 @@ from app.schemas.conversation import (
     ConversationDetailResponse,
     SendMessageResponse,
 )
+from app.schemas.approval import ApprovalResponse
 
 __all__ = [
     "UserCreate",
@@ -33,4 +34,5 @@ __all__ = [
     "ConversationResponse",
     "ConversationDetailResponse",
     "SendMessageResponse",
+    "ApprovalResponse",
 ]
